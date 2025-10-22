@@ -54,6 +54,5 @@ Edit `.env` and add your `FERNET_KEY` (required) and optional Gemini API credent
 ```bash
 python app.py
 ```
-```
 
 **Built with ❤️ by Alex, Adit, Yashas and Rahul**
