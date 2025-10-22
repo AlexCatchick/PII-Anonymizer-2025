@@ -1,10 +1,6 @@
 Flask==2.3.3
-spacy==3.7.2
+spacy>=3.8.0
 groq>=0.4.0
 python-dotenv==1.0.0
 gunicorn==21.2.0
 Flask-Cors==4.0.0
-
-# Note: If spacy installation fails, try:
-# pip install spacy --prefer-binary
-# or use: pip install spacy -U --no-cache-dir
