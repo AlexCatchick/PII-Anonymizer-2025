@@ -10,7 +10,7 @@ A complete, modular Python-Flask application that detects and anonymizes Persona
   - **Mask**: Partial masking with asterisks (J*** S***...)
   - **Replace**: Replace with entity type labels ([PERSON], [EMAIL]...)
 - **Encrypted Storage**: Secure Fernet encryption for reversible mappings
-- **LLM Integration**:  LLM API integration with mock fallback
+- **LLM Integration**: LLM API integration with mock fallback
 - **Deanonymization**: Restore original PII from LLM responses
 - **Web Interface**: Clean, responsive web CLI interface
 
@@ -54,6 +54,6 @@ Edit `.env` and add your `FERNET_KEY` (required) and optional Gemini API credent
 ```bash
 python app.py
 ```
---
+```
 
 **Built with ❤️ by Alex, Adit, Yashas and Rahul**
