@@ -107,14 +107,16 @@ class PIIAnonymizer:
         self.matcher.add("ENHANCED_PERSON", name_patterns)
         
         # Pattern for complex addresses with multiple components
+        # Keep address patterns strict to avoid generic numeric+word matches like "150 words"
         address_patterns = [
+            # Typical: number + street name + street type (e.g. "12 MG Road")
             [{"LIKE_NUM": True}, 
              {"IS_ALPHA": True, "OP": "+"}, 
              {"LOWER": {"IN": ["street", "st", "avenue", "ave", "road", "rd", "boulevard", "blvd", "drive", "dr", "lane", "ln"]}}],
+            # Apartment/unit style: number + optional name + (apt|suite|unit) + optional number
             [{"LIKE_NUM": True}, 
-             {"IS_ALPHA": True}, 
              {"IS_ALPHA": True, "OP": "?"}, 
-             {"LOWER": {"IN": ["apt", "apartment", "suite", "unit", "floor", "fl"]}, "OP": "?"}, 
+             {"LOWER": {"IN": ["apt", "apartment", "suite", "unit", "floor", "fl"]}}, 
              {"LIKE_NUM": True, "OP": "?"}]
         ]
         self.matcher.add("ENHANCED_ADDRESS", address_patterns)
@@ -376,6 +378,17 @@ class PIIAnonymizer:
         elif entity_type == 'URL':
             # Should contain protocol or domain-like structure
             return any(protocol in text.lower() for protocol in ['http', 'www', '.com', '.org', '.net'])
+
+        elif entity_type == 'ADDRESS':
+            # Reject phrases like '150 words' or other non-address numeric+word patterns
+            if re.match(r'^\d+\s+words\b', text.lower()):
+                return False
+            # Must be reasonably long and contain letters
+            if len(text.strip()) < 5:
+                return False
+            if not re.search(r'[a-zA-Z]', text):
+                return False
+            return True
         
         # For organizations, validate they're not field labels
         elif entity_type == 'ORGANIZATION':
@@ -755,11 +768,29 @@ class PIIAnonymizer:
             Deanonymized text with original PII restored
         """
         result = text
-        
+
         # Sort mappings by key length (longest first) to avoid partial replacements
         sorted_mappings = sorted(mappings.items(), key=lambda x: len(x[0]), reverse=True)
-        
+
+        # Use word-boundary, case-insensitive replacement to catch variants like 'Name_1' or 'NAME_1'
         for placeholder, original in sorted_mappings:
-            result = result.replace(placeholder, original)
-        
+            try:
+                pattern = re.compile(r"\b" + re.escape(placeholder) + r"\b", flags=re.IGNORECASE)
+
+                def _replace(match):
+                    matched_text = match.group(0)
+                    # If the placeholder was all uppercase, preserve that style
+                    if matched_text.isupper():
+                        return original.upper()
+                    # If the placeholder starts with uppercase (e.g., 'Name_1') return original as-is
+                    if matched_text[0].isupper():
+                        return original
+                    # Default: return original
+                    return original
+
+                result = pattern.sub(_replace, result)
+            except re.error:
+                # Fallback to simple replace if regex fails for any reason
+                result = result.replace(placeholder, original)
+
         return result

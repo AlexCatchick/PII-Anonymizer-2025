@@ -56,8 +56,6 @@ Copy the generated key to your `.env` file.
 cp .env.example .env
 ```
 
-Edit `.env` and add your `FERNET_KEY` (required) and optional Gemini API credentials.
-
 ### 5. Run the Application
 
 ```bash
