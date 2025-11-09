@@ -5,23 +5,14 @@ import os
 import secrets
 import base64
 
-print("=" * 70)
-print("PII-Anonymizer Setup Script")
-print("=" * 70)
-
 # Generate a Fernet-compatible key
 key = base64.urlsafe_b64encode(secrets.token_bytes(32))
-
-print("\n✅ Generated Encryption Key:")
 print(key.decode())
 
 # Create .env file
 env_content = f"""# Encryption key (REQUIRED)
 ENCRYPTION_KEY={key.decode()}
 
-# Gemini API Configuration (OPTIONAL - leave as-is for mock mode)
-GEMINI_API_URL=https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent
-GEMINI_API_KEY=your_gemini_api_key_here
 
 # Flask Configuration
 FLASK_ENV=development
@@ -82,12 +73,3 @@ except ImportError:
     print("   Option 1: pip install spacy (may fail on MSYS2)")
     print("   Option 2: Use app_simple.py without spaCy")
 
-print("\n" + "=" * 70)
-print("Setup Complete!")
-print("=" * 70)
-print("\nNext steps:")
-print("1. Install missing packages (see above)")
-print("2. Run: python app.py")
-print("3. Open: http://localhost:5000")
-print("\nOR run simplified version: python app_simple.py")
-print("=" * 70)
