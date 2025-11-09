@@ -73,15 +73,19 @@ def index():
 @app.route('/api/anonymize', methods=['POST'])
 def anonymize_text():
     """
-    Enhanced anonymize endpoint with improved error handling and validation.
+    Enhanced anonymize endpoint with three anonymization modes.
     
     Request JSON:
         {
             "text": "Input text with PII",
-            "action": "anonymize|deanonymize" (for backward compatibility)
             "mode": "pseudonymize|mask|replace",
             "call_llm": true|false
         }
+    
+    Anonymization Modes:
+        - pseudonymize: Creates semantic placeholders (name_1, email_1, mobNo_1, etc.)
+        - mask: Intelligent partial masking preserving structure (P*** M***, +1 (555) 123-X567)
+        - replace: Human-friendly labels ([Person Name], [Email Address], [Phone Number])
     
     Response JSON:
         {
@@ -112,8 +116,13 @@ def anonymize_text():
         
         print(f"🔍 Processing text (length: {len(text)}, mode: {mode})")
         
-        # Use the enhanced pseudonymize method that returns semantic mappings
-        anonymized_text, mappings = anonymizer.pseudonymize(text)
+        # Use the appropriate anonymization method based on mode
+        if mode == 'mask':
+            anonymized_text, mappings = anonymizer.mask(text)
+        elif mode == 'replace':
+            anonymized_text, mappings = anonymizer.replace(text)
+        else:  # Default to pseudonymize
+            anonymized_text, mappings = anonymizer.pseudonymize(text)
         
         # Store mappings for later deanonymization
         if mappings:
