@@ -33,6 +33,8 @@ class PIIAnonymizer:
         'PHONE': r'(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}(?:\s?(?:ext|extension|x)\.?\s?\d{1,5})?\b',
         'CREDIT_CARD': r'\b(?:4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}|4\d{15}|5[1-5]\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}|5[1-5]\d{14}|3[47]\d{2}[\s-]?\d{6}[\s-]?\d{5}|3[47]\d{13}|3[0568]\d{2}[\s-]?\d{6}[\s-]?\d{4}|3[0568]\d{12}|6(?:011|5\d{2})[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}|6(?:011|5\d{2})\d{12})\b',
         'SSN': r'\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b',
+        'ZIP_CODE': r'\b\d{5}(?:-\d{4})?\b',
+        'ACCOUNT_ID': r'\b(?:ACC|ACCT|ID|REF|CASE|ORDER|TICKET|REQ)[-.\s#:]*\d{4,}(?:-\d+)*\b',
         'PASSPORT': r'\b[A-Z]{1,2}\d{6,9}\b',
         'DRIVER_LICENSE': r'\b[A-Z]{1,2}[-.\s]?\d{6,8}\b',
         'IP_ADDRESS': r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b',
@@ -58,6 +60,8 @@ class PIIAnonymizer:
         'PHONE': 'Phone Number',
         'CREDIT_CARD': 'Credit Card',
         'SSN': 'Social Security Number',
+        'ZIP_CODE': 'ZIP Code',
+        'ACCOUNT_ID': 'Account ID',
         'PASSPORT': 'Passport Number',
         'DRIVER_LICENSE': 'Driver License',
         'ACCOUNT_NUMBER': 'Account Number',
@@ -172,6 +176,8 @@ class PIIAnonymizer:
             'SSN',          # Must come before general number patterns
             'EMAIL',        # Specific format
             'PHONE',        # After credit card
+            'ACCOUNT_ID',   # Before general patterns
+            'ZIP_CODE',     # Specific 5-digit pattern
             'IP_ADDRESS',   # Specific format
             'URL',          # Specific format
             'PASSPORT',
@@ -459,6 +465,39 @@ class PIIAnonymizer:
         elif entity_type == 'URL':
             # Should contain protocol or domain-like structure
             return any(protocol in text.lower() for protocol in ['http', 'www', '.com', '.org', '.net'])
+        
+        elif entity_type == 'DATE_TIME':
+            # Reject ZIP codes (5 digits) - these are now handled by ZIP_CODE pattern
+            if re.match(r'^\d{5}(?:-\d{4})?$', text.strip()):
+                return False
+            
+            # Reject account IDs - these are now handled by ACCOUNT_ID pattern
+            if re.match(r'^[A-Z]{2,4}[-.\s#:]*\d{4,}', text.strip(), re.IGNORECASE):
+                return False
+            
+            # Reject pure numeric strings that are too short or too long for dates
+            if text.strip().isdigit():
+                digit_count = len(text.strip())
+                # Valid date numbers: 1-2 digits (day), 4 digits (year), 6-8 digits (YYYYMMDD)
+                if digit_count == 5 or digit_count == 7 or digit_count > 8:
+                    return False
+            
+            # Reject if it looks like an ID or code (has dashes and multiple segments)
+            if text.count('-') >= 2 and any(c.isalpha() for c in text):
+                return False
+            
+            return True
+        
+        elif entity_type == 'ZIP_CODE':
+            # Validate US ZIP code format
+            return re.match(r'^\d{5}(?:-\d{4})?$', text.strip()) is not None
+        
+        elif entity_type == 'ACCOUNT_ID':
+            # Validate account ID format
+            if len(text.strip()) < 5:
+                return False
+            # Must have prefix and numbers
+            return re.match(r'^[A-Z]{2,4}[-.\s#:]*\d{4,}', text.strip(), re.IGNORECASE) is not None
 
         elif entity_type == 'ADDRESS':
             # Reject phrases like '150 words' or other non-address numeric+word patterns
@@ -568,6 +607,10 @@ class PIIAnonymizer:
                     placeholder = f"credit_card_{count}"
                 elif entity_type == "SSN":
                     placeholder = f"ssn_{count}"
+                elif entity_type == "ZIP_CODE":
+                    placeholder = f"zipcode_{count}"
+                elif entity_type == "ACCOUNT_ID":
+                    placeholder = f"account_id_{count}"
                 elif entity_type == "MEDICAL_ID":
                     placeholder = f"medical_id_{count}"
                 elif entity_type == "FINANCIAL_AMOUNT":
@@ -670,6 +713,33 @@ class PIIAnonymizer:
                     masked = f"{parts[0]}-XX-XXXX"
                 else:
                     masked = entity_text[:3] + 'X' * (len(entity_text) - 3)
+            
+            elif entity_type == 'ZIP_CODE':
+                # Mask last 2 digits of ZIP code
+                if '-' in entity_text:
+                    # Handle ZIP+4 format
+                    parts = entity_text.split('-')
+                    masked = f"{parts[0][:3]}**-****"
+                else:
+                    # Standard 5-digit ZIP
+                    masked = entity_text[:3] + '**'
+            
+            elif entity_type == 'ACCOUNT_ID':
+                # Show prefix and last few chars, mask middle
+                if len(entity_text) > 6:
+                    # Find where numbers start
+                    digit_start = next((i for i, c in enumerate(entity_text) if c.isdigit()), 0)
+                    if digit_start > 0:
+                        prefix = entity_text[:digit_start]
+                        rest = entity_text[digit_start:]
+                        if len(rest) > 4:
+                            masked = prefix + '*' * (len(rest) - 1) + rest[-1]
+                        else:
+                            masked = prefix + '*' * len(rest)
+                    else:
+                        masked = entity_text[:2] + '*' * (len(entity_text) - 3) + entity_text[-1]
+                else:
+                    masked = entity_text[0] + '*' * (len(entity_text) - 1)
             
             elif entity_type in ['PERSON_NAME', 'ORGANIZATION']:
                 # Show first letter of each word, mask rest
