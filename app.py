@@ -36,19 +36,19 @@ if not ENCRYPTION_KEY or ENCRYPTION_KEY == b'your_encryption_key_here':
     # In production, generate a temporary key but warn about it
     from crypto_util import generate_key
     ENCRYPTION_KEY = generate_key()
-    print(f"⚠️  Using temporary key for this session. For production, set ENCRYPTION_KEY environment variable!")
+    print(f"Using temporary key for this session. For production, set ENCRYPTION_KEY environment variable!")
     print(f"Generated key: {ENCRYPTION_KEY.decode()}")
 
 MAPPINGS_FILE = os.getenv('MAPPINGS_FILE', 'mappings.enc')
 
 # Initialize components
-print("🔧 Initializing PII Anonymizer...")
+print("Initializing PII Anonymizer...")
 anonymizer = PIIAnonymizer()
-print("✅ PII Anonymizer initialized")
+print("PII Anonymizer initialized")
 
-print("🔧 Initializing storage...")
+print("Initializing storage...")
 storage = MappingStorage(MAPPINGS_FILE, ENCRYPTION_KEY)
-print("✅ Storage initialized")
+print("Storage initialized")
 
 # Initialize LLM client
 GROQ_API_KEY = os.getenv('GROQ_API_KEY')
@@ -60,7 +60,7 @@ if GROQ_API_KEY:
     print(f"   API Key: {GROQ_API_KEY[:20]}...{GROQ_API_KEY[-4:]}")
     llm_client = GroqClient(GROQ_API_KEY, GROQ_MODEL)
 else:
-    print("⚠️  No GROQ_API_KEY found - running in mock mode")
+    print("No GROQ_API_KEY found - running in mock mode")
     print("   Set GROQ_API_KEY environment variable to enable LLM features")
     llm_client = GroqClient(None, GROQ_MODEL)  # Will use mock mode
 
@@ -114,36 +114,47 @@ def anonymize_text():
         
         call_llm = data.get('call_llm', False)
         
-        print(f"🔍 Processing text (length: {len(text)}, mode: {mode})")
+        print(f"Processing text (length: {len(text)}, mode: {mode})")
         
         # Use the appropriate anonymization method based on mode
         if mode == 'mask':
             anonymized_text, mappings = anonymizer.mask(text)
+            print(f"Using mask mode (irreversible)")
         elif mode == 'replace':
             anonymized_text, mappings = anonymizer.replace(text)
+            print(f"Using replace mode (irreversible)")
         else:  # Default to pseudonymize
             anonymized_text, mappings = anonymizer.pseudonymize(text)
+            print(f"Using pseudonymize mode (reversible)")
         
-        # Store mappings for later deanonymization
+        # Store mappings for later deanonymization (only for pseudonymize mode)
         if mappings:
             storage.add_mappings(mappings)
-            print(f"💾 Stored {len(mappings)} entity mappings")
+            print(f"Stored {len(mappings)} entity mappings")
+        else:
+            print(f"No mappings stored - {mode} mode is irreversible")
         
         response_data = {
             'anonymized_text': anonymized_text,
             'entity_mappings': mappings,  # Include mappings in response
-            'mappings_count': len(mappings)
+            'mappings_count': len(mappings),
+            'mode': mode,
+            'reversible': len(mappings) > 0
         }
         
         if call_llm and llm_client:
-            print("🤖 Calling LLM with anonymized text...")
+            print("Calling LLM with anonymized text...")
             # Call LLM with anonymized text
             llm_prompt = f"Please respond to the following message:\n\n{anonymized_text}"
             llm_response = llm_client.generate_response(llm_prompt)
-            print(f"✅ LLM response received (length: {len(llm_response)})")
+            print(f"LLM response received (length: {len(llm_response)})")
             
-            # Deanonymize the LLM response
-            deanonymized_output = anonymizer.deanonymize(llm_response, mappings)
+            # Deanonymize the LLM response (only works if mappings exist)
+            if mappings:
+                deanonymized_output = anonymizer.deanonymize(llm_response, mappings)
+            else:
+                deanonymized_output = llm_response  # Can't deanonymize mask/replace
+                print(f"LLM response cannot be deanonymized ({mode} mode is irreversible)")
             
             response_data.update({
                 'llm_response': llm_response,  # Keep original name for compatibility
@@ -154,7 +165,7 @@ def anonymize_text():
         return jsonify(response_data)
     
     except Exception as e:
-        print(f"❌ Error in anonymize_text: {str(e)}")
+        print(f"Error in anonymize_text: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': f'Server error: {str(e)}'}), 500
@@ -286,7 +297,7 @@ if __name__ == '__main__':
     debug_mode = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
     port = int(os.getenv('PORT', 5000))
     
-    print(f"🚀 Starting Flask application...")
+    print(f"Starting Flask application...")
     print(f"   Debug mode: {debug_mode}")
     print(f"   Port: {port}")
     print(f"   Host: 0.0.0.0")

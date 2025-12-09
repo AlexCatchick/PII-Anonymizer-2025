@@ -31,7 +31,7 @@ class PIIAnonymizer:
     REGEX_PATTERNS = {
         'EMAIL': r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b',
         'PHONE': r'(?:\+?1[-.\s]?)?\(?[0-9]{3}\)?[-.\s]?[0-9]{3}[-.\s]?[0-9]{4}(?:\s?(?:ext|extension|x)\.?\s?\d{1,5})?\b',
-        'CREDIT_CARD': r'\b(?:4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}|5[1-5]\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}|3[47]\d{2}[\s-]?\d{6}[\s-]?\d{5}|3[0568]\d{2}[\s-]?\d{6}[\s-]?\d{4}|6(?:011|5\d{2})[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4})\b',
+        'CREDIT_CARD': r'\b(?:4\d{3}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}|4\d{15}|5[1-5]\d{2}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}|5[1-5]\d{14}|3[47]\d{2}[\s-]?\d{6}[\s-]?\d{5}|3[47]\d{13}|3[0568]\d{2}[\s-]?\d{6}[\s-]?\d{4}|3[0568]\d{12}|6(?:011|5\d{2})[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}|6(?:011|5\d{2})\d{12})\b',
         'SSN': r'\b\d{3}[-.\s]?\d{2}[-.\s]?\d{4}\b',
         'PASSPORT': r'\b[A-Z]{1,2}\d{6,9}\b',
         'DRIVER_LICENSE': r'\b[A-Z]{1,2}[-.\s]?\d{6,8}\b',
@@ -165,19 +165,39 @@ class PIIAnonymizer:
         # SPECIAL HANDLING: Detect key-value pairs first
         self._detect_key_value_pairs(text, entities, seen_spans)
         
-        # FIRST: Process regex patterns (higher priority for structured data)
-        for entity_type, pattern in self.REGEX_PATTERNS.items():
+        # FIRST: Process regex patterns in priority order (more specific patterns first)
+        # Order matters! Process longer/more specific patterns before shorter ones
+        pattern_priority = [
+            'CREDIT_CARD',  # Must come before PHONE (16 digits vs 10 digits)
+            'SSN',          # Must come before general number patterns
+            'EMAIL',        # Specific format
+            'PHONE',        # After credit card
+            'IP_ADDRESS',   # Specific format
+            'URL',          # Specific format
+            'PASSPORT',
+            'DRIVER_LICENSE',
+            'MEDICAL_ID',
+            'ADDRESS',
+        ]
+        
+        # Process patterns in priority order
+        for entity_type in pattern_priority:
+            if entity_type not in self.REGEX_PATTERNS:
+                continue
+                
+            pattern = self.REGEX_PATTERNS[entity_type]
             for match in re.finditer(pattern, text, re.IGNORECASE | re.MULTILINE):
                 span = (match.start(), match.end())
                 entity_text = match.group()
                 
-                # Skip if already covered by key-value detection
+                # Skip if already covered by key-value detection or previous patterns
                 if self._overlaps_with_existing(span, seen_spans):
                     continue
                 
                 # Additional validation for specific entity types
                 if self._validate_entity(entity_text, entity_type):
                     entities.append((entity_text, entity_type, match.start(), match.end()))
+                    seen_spans.add(span)
                     seen_spans.add(span)
         
         # SECOND: Process spaCy NER entities (but avoid overlaps with regex)
@@ -291,10 +311,14 @@ class PIIAnonymizer:
             'inc', 'llc', 'ltd', 'co', 'organization', 'office', 'division'
         }
         
-        # Skip field labels for ANY entity type to prevent misclassification
+        # Skip field labels ONLY for unstructured entity types (not for structured data like EMAIL, PHONE, etc.)
+        # Structured data types (EMAIL, PHONE, SSN, etc.) should be validated by their own rules
         text_lower = text.lower().strip()
-        if text_lower in field_labels or any(label in text_lower for label in field_labels):
-            return False
+        
+        # Only apply field label filtering for unstructured entity types
+        if entity_type in ['PERSON_NAME', 'ORGANIZATION', 'LOCATION']:
+            if text_lower in field_labels or any(label in text_lower for label in field_labels):
+                return False
         
         # If detected as PERSON_NAME, validate it's actually a person name
         if entity_type == 'PERSON_NAME':
@@ -322,19 +346,26 @@ class PIIAnonymizer:
         elif entity_type == 'PHONE':
             # Should contain enough digits and proper format
             digits = re.findall(r'\d', text)
-            if len(digits) < 10:
+            if len(digits) < 7:  # Minimum phone length
                 return False
             
-            # Reject if it looks like an account number or ID (too long or no separators)
+            if len(digits) < 10 and not re.search(r'[\(\)\-\.\s]', text):
+                # Less than 10 digits should have separators
+                return False
+            
+            # Reject if it looks like an account number or ID (too long)
             if len(digits) > 15:  # Too long for phone
                 return False
+            
+            # Reject if it's 13+ consecutive digits (likely credit card or account number)
+            if len(digits) >= 13:
+                # Check if digits are consecutive (no separators)
+                clean_text = ''.join(c for c in text if c.isdigit())
+                if len(clean_text) >= 13:
+                    return False
                 
-            # Should have phone-like separators or be exactly 10-11 digits
+            # Should have phone-like separators if more than 11 digits
             if len(digits) > 11 and not re.search(r'[\(\)\-\.\s]', text):
-                return False
-                
-            # Reject if it's clearly an account number pattern
-            if len(digits) > 12 and not any(sep in text for sep in ['(', ')', '-', '.', ' ']):
                 return False
         
         # Enhanced account number validation
@@ -352,13 +383,63 @@ class PIIAnonymizer:
             return len(text) >= 3 and len(text) <= 15
         
         elif entity_type == 'EMAIL':
-            # Basic email validation
-            return '@' in text and '.' in text.split('@')[-1]
+            # Enhanced email validation
+            if '@' not in text:
+                return False
+            
+            parts = text.split('@')
+            if len(parts) != 2:
+                return False
+            
+            local, domain = parts
+            
+            # Local part must exist and be reasonable
+            if not local or len(local) < 1:
+                return False
+            
+            # Domain must have at least one dot and valid parts
+            if '.' not in domain:
+                return False
+            
+            domain_parts = domain.split('.')
+            if len(domain_parts) < 2:
+                return False
+            
+            # All domain parts must exist
+            if any(not part for part in domain_parts):
+                return False
+            
+            return True
         
         elif entity_type == 'CREDIT_CARD':
-            # Should have enough digits but not be confused with account numbers
+            # Should have enough digits and match known card patterns
             digits = re.findall(r'\d', text)
-            return 13 <= len(digits) <= 19
+            if not (13 <= len(digits) <= 19):
+                return False
+            
+            # Get all digits as a string to check prefix
+            digit_string = ''.join(digits)
+            
+            # Validate it starts with a known card prefix
+            if digit_string[0] == '3':  # Amex, Diners
+                if len(digit_string) not in [14, 15]:
+                    return False
+            elif digit_string[0] == '4':  # Visa (13 or 16 digits)
+                if len(digit_string) not in [13, 16]:
+                    return False
+            elif digit_string[0] == '5':  # Mastercard (16 digits)
+                if len(digit_string) != 16:
+                    return False
+                if digit_string[1] not in '12345':  # 51-55
+                    return False
+            elif digit_string[0] == '6':  # Discover (16 digits)
+                if len(digit_string) != 16:
+                    return False
+            else:
+                # Invalid prefix
+                return False
+            
+            return True
         
         elif entity_type == 'SSN':
             # Should have exactly 9 digits
@@ -444,80 +525,89 @@ class PIIAnonymizer:
         # Initialize entity counters for type-specific numbering
         entity_counters = {}
         
+        # Track value-to-placeholder mapping to reuse same placeholder for identical values
+        value_to_placeholder = {}
+        
         # Process entities in correct order for position tracking
         result = text
         offset = 0
         
         for entity_text, entity_type, start, end in entities:
-            # Generate human-friendly pseudonym with industry standard naming
-            human_label = self.HUMAN_LABELS.get(entity_type, entity_type.replace('_', ' ').title())
+            # Check if we've seen this exact value before
+            cache_key = f"{entity_type}:{entity_text}"
             
-            # Create context-aware pseudonyms with type-specific counters
-            if entity_type in entity_counters:
-                entity_counters[entity_type] += 1
+            if cache_key in value_to_placeholder:
+                # Reuse existing placeholder for same value
+                placeholder = value_to_placeholder[cache_key]
             else:
-                entity_counters[entity_type] = 1
-            
-            count = entity_counters[entity_type]
-            
-            # LLM-friendly pseudonym generation with semantic labels
-            if entity_type == "PERSON_NAME":
-                placeholder = f"name_{count}"
-            elif entity_type == "ORGANIZATION":
-                placeholder = f"company_{count}"
-            elif entity_type == "LOCATION":
-                placeholder = f"location_{count}"
-            elif entity_type == "EMAIL":
-                placeholder = f"email_{count}"
-            elif entity_type == "PHONE":
-                placeholder = f"mobNo_{count}"
-            elif entity_type == "ADDRESS":
-                placeholder = f"physical_address_{count}"
-            elif entity_type == "DATE_TIME":
-                placeholder = f"date_{count}"
-            elif entity_type == "CREDIT_CARD":
-                placeholder = f"credit_card_{count}"
-            elif entity_type == "SSN":
-                placeholder = f"ssn_{count}"
-            elif entity_type == "MEDICAL_ID":
-                placeholder = f"medical_id_{count}"
-            elif entity_type == "FINANCIAL_AMOUNT":
-                placeholder = f"amount_{count}"
-            elif entity_type == "IP_ADDRESS":
-                placeholder = f"ip_address_{count}"
-            elif entity_type == "URL":
-                placeholder = f"url_{count}"
-            elif entity_type == "PASSPORT":
-                placeholder = f"passport_{count}"
-            elif entity_type == "DRIVER_LICENSE":
-                placeholder = f"driver_license_{count}"
-            elif entity_type == "ACCOUNT_NUMBER":
-                placeholder = f"account_number_{count}"
-            elif entity_type == "EMPLOYEE_ID":
-                placeholder = f"employee_id_{count}"
-            elif entity_type == "APPLICATION_NUMBER":
-                placeholder = f"application_number_{count}"
-            elif entity_type == "BANK_ACCOUNT":
-                placeholder = f"bank_account_{count}"
-            elif entity_type == "FACILITY_NAME":
-                placeholder = f"facility_{count}"
-            elif entity_type == "EVENT_NAME":
-                placeholder = f"event_{count}"
-            elif entity_type == "LEGAL_DOCUMENT":
-                placeholder = f"document_{count}"
-            elif entity_type == "NATIONALITY_GROUP":
-                placeholder = f"group_{count}"
-            elif entity_type == "LANGUAGE_NAME":
-                placeholder = f"language_{count}"
-            elif entity_type == "ARTWORK_TITLE":
-                placeholder = f"artwork_{count}"
-            else:
-                # Generic pseudonym for other entity types with clean naming
-                clean_type = entity_type.lower().replace('_', '_').replace(' ', '_')
-                placeholder = f"{clean_type}_{count}"
-            
-            # Store mapping for reversibility
-            self.mappings[placeholder] = entity_text
+                # Generate new placeholder for new value
+                # Create context-aware pseudonyms with type-specific counters
+                if entity_type in entity_counters:
+                    entity_counters[entity_type] += 1
+                else:
+                    entity_counters[entity_type] = 1
+                
+                count = entity_counters[entity_type]
+                
+                # LLM-friendly pseudonym generation with semantic labels
+                if entity_type == "PERSON_NAME":
+                    placeholder = f"name_{count}"
+                elif entity_type == "ORGANIZATION":
+                    placeholder = f"company_{count}"
+                elif entity_type == "LOCATION":
+                    placeholder = f"location_{count}"
+                elif entity_type == "EMAIL":
+                    placeholder = f"email_{count}"
+                elif entity_type == "PHONE":
+                    placeholder = f"mobNo_{count}"
+                elif entity_type == "ADDRESS":
+                    placeholder = f"physical_address_{count}"
+                elif entity_type == "DATE_TIME":
+                    placeholder = f"date_{count}"
+                elif entity_type == "CREDIT_CARD":
+                    placeholder = f"credit_card_{count}"
+                elif entity_type == "SSN":
+                    placeholder = f"ssn_{count}"
+                elif entity_type == "MEDICAL_ID":
+                    placeholder = f"medical_id_{count}"
+                elif entity_type == "FINANCIAL_AMOUNT":
+                    placeholder = f"amount_{count}"
+                elif entity_type == "IP_ADDRESS":
+                    placeholder = f"ip_address_{count}"
+                elif entity_type == "URL":
+                    placeholder = f"url_{count}"
+                elif entity_type == "PASSPORT":
+                    placeholder = f"passport_{count}"
+                elif entity_type == "DRIVER_LICENSE":
+                    placeholder = f"driver_license_{count}"
+                elif entity_type == "ACCOUNT_NUMBER":
+                    placeholder = f"account_number_{count}"
+                elif entity_type == "EMPLOYEE_ID":
+                    placeholder = f"employee_id_{count}"
+                elif entity_type == "APPLICATION_NUMBER":
+                    placeholder = f"application_number_{count}"
+                elif entity_type == "BANK_ACCOUNT":
+                    placeholder = f"bank_account_{count}"
+                elif entity_type == "FACILITY_NAME":
+                    placeholder = f"facility_{count}"
+                elif entity_type == "EVENT_NAME":
+                    placeholder = f"event_{count}"
+                elif entity_type == "LEGAL_DOCUMENT":
+                    placeholder = f"document_{count}"
+                elif entity_type == "NATIONALITY_GROUP":
+                    placeholder = f"group_{count}"
+                elif entity_type == "LANGUAGE_NAME":
+                    placeholder = f"language_{count}"
+                elif entity_type == "ARTWORK_TITLE":
+                    placeholder = f"artwork_{count}"
+                else:
+                    # Generic pseudonym for other entity types with clean naming
+                    clean_type = entity_type.lower().replace('_', '_').replace(' ', '_')
+                    placeholder = f"{clean_type}_{count}"
+                
+                # Store mapping for reversibility and cache
+                self.mappings[placeholder] = entity_text
+                value_to_placeholder[cache_key] = placeholder
             
             # Replace in text with offset adjustment
             result = result[:start + offset] + placeholder + result[end + offset:]
@@ -530,14 +620,16 @@ class PIIAnonymizer:
         Enhanced masking for complex PII entities with intelligent partial reveal.
         Partially mask PII while preserving structure and readability.
         
+        Note: This is a ONE-WAY transformation for display purposes only.
+        Masked text cannot be deanonymized back to original values.
+        
         Args:
             text: Input text containing PII
             
         Returns:
-            Tuple of (anonymized_text, mappings_dict)
+            Tuple of (masked_text, empty_dict) - mappings not stored for mask mode
         """
         entities = self.detect_pii(text)
-        self.mappings = {}
         
         result = text
         offset = 0
@@ -644,50 +736,41 @@ class PIIAnonymizer:
                     else:
                         masked = '*'
             
-            # Store mapping for potential reversal
-            placeholder = f"MASKED_{start}_{end}"
-            self.mappings[placeholder] = entity_text
-            
-            # Replace in text
+            # Replace in text (no mapping stored - this is irreversible)
             result = result[:start + offset] + masked + result[end + offset:]
             offset += len(masked) - (end - start)
         
-        return result, self.mappings
+        return result, {}
     
     def replace(self, text: str) -> Tuple[str, Dict[str, str]]:
         """
         Enhanced replacement with human-friendly entity type labels.
         Replace PII with descriptive entity labels using industry standards.
         
+        Note: This is a ONE-WAY transformation for display purposes only.
+        Replaced text cannot be deanonymized back to original values.
+        
         Args:
             text: Input text containing PII
             
         Returns:
-            Tuple of (anonymized_text, mappings_dict)
+            Tuple of (replaced_text, empty_dict) - mappings not stored for replace mode
         """
         entities = self.detect_pii(text)
-        self.counter = 0
-        self.mappings = {}
         
         result = text
         offset = 0
         
         for entity_text, entity_type, start, end in entities:
-            self.counter += 1
-            
             # Use human-friendly labels from our mapping
             human_label = self.HUMAN_LABELS.get(entity_type, entity_type.replace('_', ' ').title())
             placeholder = f"[{human_label}]"
             
-            # Store mapping with unique identifier for potential reversal
-            unique_key = f"{placeholder}_{self.counter}"
-            self.mappings[unique_key] = entity_text
-            
-            # Replace in text
+            # Replace in text (no mapping stored - this is irreversible)
             result = result[:start + offset] + placeholder + result[end + offset:]
             offset += len(placeholder) - (end - start)
         
-        return result, self.mappings
+        return result, {}
     
     def get_detection_stats(self, text: str) -> Dict[str, int]:
         """
@@ -742,10 +825,14 @@ class PIIAnonymizer:
         
         Args:
             text: Input text containing PII
-            mode: Anonymization mode ('pseudonymize', 'mask', 'replace')
+            mode: Anonymization mode
+                - 'pseudonymize': Reversible, creates mappings for deanonymization
+                - 'mask': Irreversible, partial masking for display
+                - 'replace': Irreversible, human-friendly labels for display
             
         Returns:
             Tuple of (anonymized_text, mappings_dict)
+            Note: mappings_dict is empty for 'mask' and 'replace' modes
         """
         if mode == 'pseudonymize':
             return self.pseudonymize(text)
@@ -760,8 +847,11 @@ class PIIAnonymizer:
         """
         Restore original PII using stored mappings.
         
+        Note: Only works with text from 'pseudonymize' mode.
+        Text from 'mask' or 'replace' modes cannot be deanonymized.
+        
         Args:
-            text: Anonymized text
+            text: Pseudonymized text (from pseudonymize mode)
             mappings: Dictionary of placeholder -> original value
             
         Returns:
