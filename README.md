@@ -56,7 +56,24 @@ Copy the generated key to your `.env` file.
 cp .env.example .env
 ```
 
-### 5. Run the Application
+### 5. (Optional) Setup Google Cloud Vision for Cloud-Based OCR
+
+For better OCR performance and reduced memory footprint (important for Render deployment):
+
+1. Create a Google Cloud project and enable Cloud Vision API
+2. Create a service account and download the JSON key
+3. Set the environment variable:
+   ```bash
+   export GCP_CREDENTIALS_JSON='<paste the entire JSON key content here>'
+   ```
+   Or specify a file path:
+   ```bash
+   export GCP_CREDENTIALS_PATH='/path/to/service-account-key.json'
+   ```
+
+📖 See [GCP_OAUTH_SETUP.md](GCP_OAUTH_SETUP.md) for detailed setup instructions.
+
+### 6. Run the Application
 
 ```bash
 python app.py
@@ -82,14 +99,19 @@ The PII Anonymizer is also available as a **browser extension** for Chrome, Edge
 
 Deploy the Flask backend to a cloud service:
 
-**Render (Recommended - Free Tier)**:
+#### Render (Recommended - Free Tier)
 1. Push code to GitHub
 2. Go to [render.com](https://render.com) → New Web Service
 3. Connect your repository
 4. Set Build Command: `pip install -r requirements.txt && python -m spacy download en_core_web_sm`
 5. Set Start Command: `gunicorn app:app`
-6. Add environment variables: `ENCRYPTION_KEY`, `GROQ_API_KEY`
+6. Add environment variables:
+   - `ENCRYPTION_KEY`: Your encryption key
+   - `GROQ_API_KEY`: Your Groq API key (optional, for LLM features)
+   - `GCP_CREDENTIALS_JSON`: Your Google Cloud service account JSON key (recommended for OCR)
 7. Deploy!
+
+📖 See [GCP_OAUTH_SETUP.md](GCP_OAUTH_SETUP.md) for how to obtain `GCP_CREDENTIALS_JSON`.
 
 Or use the included `render.yaml` for one-click deployment.
 

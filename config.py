@@ -17,6 +17,11 @@ class Config:
     JSON_SORT_KEYS = False
     JSONIFY_PRETTYPRINT_REGULAR = True
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB max file size
+    
+    # Mapping TTL (time-to-live) in seconds — how long PII mappings persist
+    # Default: 30 minutes.  Range: 60s (1 min) to 86400s (24 hours)
+    # Set via MAPPING_TTL environment variable
+    MAPPING_TTL = int(os.getenv('MAPPING_TTL', '1800'))
 
 class DevelopmentConfig(Config):
     """Development configuration."""
