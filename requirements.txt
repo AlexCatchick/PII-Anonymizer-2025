@@ -11,11 +11,12 @@ cryptography>=41.0.0
 opencv-python-headless>=4.8.0  # Image processing and text region detection (headless = no GUI, smaller)
 numpy>=1.24.0                  # Numerical operations for cv2
 Pillow>=10.0.0                 # Image operations
+easyocr>=1.7.1                 # OCR engine fallback (pulls PyTorch dependency)
 PyPDF2>=3.0.0                  # PDF text extraction
 psutil>=5.9.0                  # Memory monitoring
 
-# Note: easyocr removed - it pulls in PyTorch (~900MB) which exceeds Render's 512MB free tier.
-# The HybridOCRExtractor falls back gracefully to pattern-based + OpenCV extraction.
+# Note: easyocr enabled - this adds PyTorch dependency and may increase memory usage.
+# The HybridOCRExtractor still uses pattern-based + OpenCV first, with EasyOCR fallback.
 # Note: No Tesseract or GCP dependencies needed!
-# Memory footprint: ~150-200MB (fits Render 512MB free tier)
+# Memory footprint depends on PyTorch/EasyOCR model loading.
 
